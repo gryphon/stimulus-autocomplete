@@ -10,6 +10,8 @@ export default class Autocomplete extends Controller {
     ready: Boolean,
     submitOnEnter: Boolean,
     url: String,
+    params: Object, // Additional params to be passed to search query
+    prefetch: Boolean, // Says to prefetch results on connect
     minLength: Number,
   }
 
@@ -25,6 +27,7 @@ export default class Autocomplete extends Controller {
 
     this.inputTarget.addEventListener("keydown", this.onKeydown)
     this.inputTarget.addEventListener("blur", this.onInputBlur)
+    this.inputTarget.addEventListener("focus", this.onInputFocus)
     this.inputTarget.addEventListener("input", this.onInputChange)
     this.resultsTarget.addEventListener("mousedown", this.onResultsMouseDown)
     this.resultsTarget.addEventListener("click", this.onResultsClick)
@@ -116,6 +119,12 @@ export default class Autocomplete extends Controller {
     this.close()
   }
 
+  onInputFocus = () => {
+    if (this.prefetchValue && (!this.inputTarget.value)) {
+      this.fetchResults()
+    }
+  }
+
   commit(selected) {
     if (selected.getAttribute("aria-disabled") === "true") return
 
@@ -140,12 +149,15 @@ export default class Autocomplete extends Controller {
     this.inputTarget.focus()
     this.hideAndRemoveOptions()
 
-    this.element.dispatchEvent(
-      new CustomEvent("autocomplete.change", {
-        bubbles: true,
-        detail: { value: value, textValue: textValue, selected: selected }
-      })
-    )
+    // this.element.dispatchEvent(
+    //   new CustomEvent("autocomplete.change", {
+    //     bubbles: true,
+    //     detail: { value: value, textValue: textValue, selected: selected }
+    //   })
+    // )
+    // Dispatch Stimulus event instead JS
+    this.dispatch("select", { detail: { option: selected } }) 
+
   }
 
   clear() {
@@ -191,10 +203,11 @@ export default class Autocomplete extends Controller {
     this.resultsTarget.innerHTML = null
   }
 
-  fetchResults = async (query) => {
+  fetchResults = async () => {
     if (!this.hasUrlValue) return
+    const url = this.buildQueryURL()
+    if(!url) return
 
-    const url = this.buildURL(query)
     try {
       this.element.dispatchEvent(new CustomEvent("loadstart"))
       const html = await this.doFetch(url)
@@ -208,12 +221,28 @@ export default class Autocomplete extends Controller {
     }
   }
 
-  buildURL(query) {
+  buildQueryURL() {
+    const query = this.inputTarget.value.trim()
+    if ((!query || query.length < this.minLengthValue) && (!this.prefetchValue)) {
+      this.hideAndRemoveOptions()
+      return null
+    }
     const url = new URL(this.urlValue, window.location.href)
     const params = new URLSearchParams(url.search.slice(1))
-    params.append("q", query)
+    if (this.paramsValue) {
+      Object.entries(this.paramsValue).forEach((entry) => {
+        params.append(entry[0], entry[1])
+      })
+    }
+    let need_query = true
+    params.forEach((value, key) => {
+      if (value == "[query]") {
+        params.set(key, query)
+        need_query = false
+      }
+    });
+    if (need_query) params.append("q", query)
     url.search = params.toString()
-
     return url.toString()
   }
 
