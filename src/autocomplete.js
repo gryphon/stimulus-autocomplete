@@ -4,7 +4,7 @@ const optionSelector = "[role='option']:not([aria-disabled])"
 const activeSelector = "[aria-selected='true']"
 
 export default class Autocomplete extends Controller {
-  static targets = ["input", "hidden", "results"]
+  static targets = ["input", "hidden", "results", "current"]
   static classes = ["selected"]
   static values = {
     ready: Boolean,
@@ -13,6 +13,8 @@ export default class Autocomplete extends Controller {
     params: Object, // Additional params to be passed to search query
     prefetch: Boolean, // Says to prefetch results on connect
     minLength: Number,
+    opened: {type: Boolean, default: false},
+    text: String
   }
 
   connect() {
@@ -40,6 +42,7 @@ export default class Autocomplete extends Controller {
   }
 
   disconnect() {
+
     if (this.hasInputTarget) {
       this.inputTarget.removeEventListener("keydown", this.onKeydown)
       this.inputTarget.removeEventListener("blur", this.onInputBlur)
@@ -52,6 +55,11 @@ export default class Autocomplete extends Controller {
     }
   }
 
+  openedValueChanged() {
+    console.log("Opened Value Changed", this.openedValue)
+    if (this.openedValue) this.focus();
+  }
+
   sibling(next) {
     const options = this.options
     const selected = this.selectedOption
@@ -62,6 +70,7 @@ export default class Autocomplete extends Controller {
   }
 
   select(target) {
+
     const previouslySelected = this.selectedOption
     if (previouslySelected) {
       previouslySelected.removeAttribute("aria-selected")
@@ -85,7 +94,7 @@ export default class Autocomplete extends Controller {
     this.hideAndRemoveOptions()
     event.stopPropagation()
     event.preventDefault()
-  }
+  } 
 
   onArrowDownKeydown = (event) => {
     const item = this.sibling(true)
@@ -105,6 +114,7 @@ export default class Autocomplete extends Controller {
   }
 
   onEnterKeydown = (event) => {
+    console.log("Enter keydown handled")
     const selected = this.selectedOption
     if (selected && this.resultsShown) {
       this.commit(selected)
@@ -115,40 +125,100 @@ export default class Autocomplete extends Controller {
   }
 
   onInputBlur = () => {
+    console.log("Autocomplete -> Input blurred")
+
     if (this.mouseDown) return
+
+    this.element.classList.remove("focus")
+
+    if (this.currentTarget) {
+      this.currentTarget.classList.remove("invisible")
+    }
+    this.inputTarget.value = "" // We now have currentTarget that shows current option
     this.close()
   }
 
-  onInputFocus = () => {
-    if (this.prefetchValue && (!this.inputTarget.value)) {
+  onInputFocus = (event) => {
+
+    event.stopPropagation();
+
+    // Fixing issue when invoked on form submits
+    if (event.constructor.name== "PointerEvent" && event.pointerId == -1) return;
+
+    this.focus();
+
+  }
+
+  focus() {
+
+    this.element.classList.add("focus")
+
+    if (this.prefetchValue && (!this.resultsShown)) {
       this.fetchResults()
+    }
+    this.inputTarget.value = this.textValue;
+    this.inputTarget.select()
+
+    // Opening hint as results for the first time only
+    if (this.hasUrlValue && !this.prefetchValue && !this.hintShowed) {
+      this.hintShowed = true
+      this.open()
+    }
+
+    if (this.currentTarget) {
+      this.currentTarget.classList.add("invisible")
     }
   }
 
-  commit(selected) {
-    if (selected.getAttribute("aria-disabled") === "true") return
+  cancel(event) {
+    event.stopPropagation()
+    this.commit()
+  }
 
-    if (selected instanceof HTMLAnchorElement) {
-      selected.click()
-      this.close()
-      return
+  commit(selected) {
+
+    console.log("Autocomplete->commit", selected)
+
+    if (selected) {
+      if (selected.getAttribute("aria-disabled") === "true") return
+
+      if (selected instanceof HTMLAnchorElement) {
+        selected.click()
+        this.close()
+        return
+      }
     }
 
-    const textValue = selected.getAttribute("data-autocomplete-label") || selected.textContent.trim()
-    const value = selected.getAttribute("data-autocomplete-value") || textValue
-    this.inputTarget.value = textValue
+    let value = ""
+
+    if (selected) {
+      this.textValue = selected.getAttribute("data-autocomplete-label") || selected.textContent.trim()
+      value = selected.getAttribute("data-autocomplete-value") || this.textValue
+    } else {
+      this.textValue = ""
+    }
+    this.inputTarget.value = ""
 
     if (this.hasHiddenTarget) {
       this.hiddenTarget.value = value
       this.hiddenTarget.dispatchEvent(new Event("input"))
       this.hiddenTarget.dispatchEvent(new Event("change"))
     } else {
-      this.inputTarget.value = value
+      this.inputTarget.value = ""
     }
 
     this.inputTarget.focus()
+    this.inputTarget.blur() // TODO: why to focus input here?
     this.hideAndRemoveOptions()
 
+    if (this.currentTarget) {
+      if (selected) {
+        this.currentTarget.innerHTML = selected.innerHTML;
+      } else {
+        this.currentTarget.innerHTML = null;
+      } 
+    }
+    
     // this.element.dispatchEvent(
     //   new CustomEvent("autocomplete.change", {
     //     bubbles: true,
@@ -166,9 +236,26 @@ export default class Autocomplete extends Controller {
   }
 
   onResultsClick = (event) => {
-    if (!(event.target instanceof Element)) return
+
+    if (! this.resultsShown) return;
+
+    console.log("Results click")
+
+    event.stopPropagation();
+    event.preventDefault(); // This is because we have open event processor at the root element
+
+    if (!(event.target instanceof Element)) {
+      console.log("autocomplete->resultsClick: not instanceof Element")
+      return
+    }
     const selected = event.target.closest(optionSelector)
-    if (selected) this.commit(selected)
+    console.log("autocomplete->resultsClick: selected", selected)
+
+    if (selected) {
+      this.commit(selected)
+    } else {
+      this.close()
+    }
   }
 
   onResultsMouseDown = () => {
@@ -186,7 +273,12 @@ export default class Autocomplete extends Controller {
     if (query && query.length >= this.minLengthValue) {
       this.fetchResults(query)
     } else {
-      this.hideAndRemoveOptions()
+      if (this.hasUrlValue) {
+        this.hideAndRemoveOptions()
+      } else {
+        // We will show full list if we have prefetched list
+        this.fetchResults(query)
+      }
     }
   }
 
@@ -200,13 +292,28 @@ export default class Autocomplete extends Controller {
 
   hideAndRemoveOptions() {
     this.close()
-    this.resultsTarget.innerHTML = null
+    if (this.hasUrlValue) this.resultsTarget.innerHTML = null
+  }
+
+  filterPreloadedList() {
+    console.log("Filtering prefetched list with", this.inputTarget.value.trim())
+    Array.from(this.resultsTarget.children).forEach(e => {
+      if (!e.dataset.autocompleteLabel) return
+      if ((this.inputTarget.value.trim() == "") || e.dataset.autocompleteLabel.toLowerCase().includes(this.inputTarget.value.trim().toLowerCase())) e.classList.remove("d-none") 
+      else e.classList.add("d-none") 
+    });
   }
 
   fetchResults = async () => {
-    if (!this.hasUrlValue) return
+
+    if (!this.hasUrlValue) {
+      // Results should already be preloaded
+      console.log("Showing up preloaded list as there is not url")
+      this.filterPreloadedList()
+      this.open()
+      return
+    }
     const url = this.buildQueryURL()
-    if(!url) return
 
     try {
       this.element.dispatchEvent(new CustomEvent("loadstart"))
@@ -253,6 +360,7 @@ export default class Autocomplete extends Controller {
   }
 
   replaceResults(html) {
+
     this.resultsTarget.innerHTML = html
     this.identifyOptions()
     if (!!this.options) {
@@ -280,6 +388,7 @@ export default class Autocomplete extends Controller {
     this.resultsShown = false
     this.inputTarget.removeAttribute("aria-activedescendant")
     this.element.setAttribute("aria-expanded", "false")
+
     this.element.dispatchEvent(
       new CustomEvent("toggle", {
         detail: { action: "close", inputTarget: this.inputTarget, resultsTarget: this.resultsTarget }
